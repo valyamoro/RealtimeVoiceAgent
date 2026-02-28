@@ -204,13 +204,17 @@ func outputCallback(pOutput, pInput []byte, frameCount uint32) {
 func (a *AudioIO) loop() {
 	chunkMs := (float64(ChunkSize) / Rate) * 1000.0
 
+	ticker := time.NewTicker(100*time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-a.stopCh:
 			return
 		case data := <-a.micCh:
 			a.processAudioChunk(data, chunkMs)
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
+			log.Println("Tick")
 			a.checkEOU()
 			a.checkSilence()
 		}
