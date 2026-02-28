@@ -60,6 +60,7 @@ type AudioIO struct {
 	captureDevice     *malgo.Device
 	playbackDevice    *malgo.Device
 	mutex             sync.Mutex
+	stopOnce		  sync.Once
 }
 
 var globalAudioIO *AudioIO
@@ -214,7 +215,6 @@ func (a *AudioIO) loop() {
 		case data := <-a.micCh:
 			a.processAudioChunk(data, chunkMs)
 		case <-ticker.C:
-			log.Println("Tick")
 			a.checkEOU()
 			a.checkSilence()
 		}
@@ -447,19 +447,21 @@ func (a *AudioIO) median(values []float64) float64 {
 
 // stop stops audio processing
 func (a *AudioIO) stop() {
-	close(a.stopCh)
+	a.stopOnce.Do(func() {
+		close(a.stopCh)
 
-	if a.captureDevice != nil {
-		a.captureDevice.Stop()
-		a.captureDevice.Uninit()
-	}
-	if a.playbackDevice != nil {
-		a.playbackDevice.Stop()
-		a.playbackDevice.Uninit()
-	}
-	if a.ctx != nil {
-		a.ctx.Uninit()
-	}
+		if a.captureDevice != nil {
+			a.captureDevice.Stop()
+			a.captureDevice.Uninit()
+		}
+		if a.playbackDevice != nil {
+			a.playbackDevice.Stop()
+			a.playbackDevice.Uninit()
+		}
+		if a.ctx != nil {
+			a.ctx.Uninit()
+		}
 
-	log.Println("AudioIO stopped")
+		log.Println("AudioIO stopped")
+	})
 }
