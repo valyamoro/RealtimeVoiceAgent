@@ -100,7 +100,7 @@ func (rt *Realtime) onBargeIn() {
 
 	rt.responding = false
 	rt.activeResponseID = nil
-	rt.audio.responseEnded = false
+	rt.audio.responseEnded.Store(false)
 	rt.writeState(false)
 	rt.sock.Send(map[string]interface{}{
 		"type": "input_audio_buffer.clear",
@@ -199,7 +199,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			if rt.activeResponseID == nil {
 				rt.activeResponseID = &rid
 				rt.responding = true
-				rt.audio.responseEnded = false
+				rt.audio.responseEnded.Store(false)
 				rt.writeState(true)
 				log.Printf("[RESP] created id=%s", rid)
 			}
@@ -313,7 +313,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 		if rt.activeResponseID != nil && rid == *rt.activeResponseID {
 			rt.responding = false
 			rt.activeResponseID = nil
-			rt.audio.responseEnded = true
+			rt.audio.responseEnded.Store(true)
 		}
 
 		rt.txnLock.Lock()

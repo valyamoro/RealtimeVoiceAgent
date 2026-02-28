@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gen2brain/malgo"
@@ -41,7 +42,7 @@ type AudioIO struct {
 	playBuf           []byte
 	micCh             chan []byte
 	stopCh            chan struct{}
-	recording         bool
+	recording         atomic.Bool
 	utterBuf          []byte
 	utterVoiceMs      float64
 	utterStart        time.Time
@@ -49,13 +50,13 @@ type AudioIO struct {
 	lastCommitTs      time.Time
 	eouCandidateTs    *time.Time
 	energyFloor       float64
-	warmupDone        bool
+	warmupDone        atomic.Bool
 	warmupEnergy      []float64
 	playRmsEma        float64
 	bargeHoldMs       float64
 	anySpeechMs       float64
 	silenceStart      *time.Time
-	responseEnded     bool
+	responseEnded     atomic.Bool
 	ctx               *malgo.AllocatedContext
 	captureDevice     *malgo.Device
 	playbackDevice    *malgo.Device
@@ -239,13 +240,13 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 		a.lastVoiceTime = now
 	}
 
-	if !a.warmupDone {
+	if !a.warmupDone.Load() {
 		a.warmupEnergy = append(a.warmupEnergy, energy)
 		totalSamples := len(a.warmupEnergy) * ChunkSize
 		if float64(totalSamples)/Rate >= VadWarmupSec {
 			median := a.median(a.warmupEnergy)
 			a.energyFloor = math.Max(EnergyThresh, median*2.0)
-			a.warmupDone = true
+			a.warmupDone.Store(true)
 			log.Printf("[VAD] Floor set to %.4f", a.energyFloor)
 		}
 	}
@@ -281,15 +282,15 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 		}
 	}
 
-	if !a.recording && voiced {
-		a.recording = true
+	if !a.recording.Load() && voiced {
+		a.recording.Store(true)
 		a.utterBuf = make([]byte, 0)
 		a.utterVoiceMs = 0.0
 		a.utterStart = now
 		a.eouCandidateTs = nil
 	}
 
-	if a.recording {
+	if a.recording.Load() {
 		a.utterBuf = append(a.utterBuf, data...)
 		if voiced {
 			a.utterVoiceMs += chunkMs
@@ -301,7 +302,7 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 }
 
 func (a *AudioIO) checkEOU() {
-	if !a.recording {
+	if !a.recording.Load() {
 		return
 	}
 
@@ -328,7 +329,7 @@ func (a *AudioIO) checkEOU() {
 }
 
 func (a *AudioIO) checkSilence() {
-	if !a.ctrl.responding && !a.responseEnded {
+	if !a.ctrl.responding && !a.responseEnded.Load() {
 		return
 	}
 
@@ -338,7 +339,7 @@ func (a *AudioIO) checkSilence() {
 			ts := now
 			a.silenceStart = &ts
 		} else if now.Sub(*a.silenceStart).Milliseconds() >= int64(SilenceDurMs) {
-			if a.responseEnded && !a.ctrl.responding {
+			if a.responseEnded.Load() && !a.ctrl.responding {
 				a.ctrl.writeState(false)
 				a.silenceStart = nil
 			}
@@ -402,7 +403,7 @@ func (a *AudioIO) commitAtomic() {
 }
 
 func (a *AudioIO) resetRecording() {
-	a.recording = false
+	a.recording.Store(false)
 	a.utterBuf = a.utterBuf[:0]
 	a.utterVoiceMs = 0.0
 	a.utterStart = time.Time{}
