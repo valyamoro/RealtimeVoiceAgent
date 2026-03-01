@@ -52,7 +52,7 @@ type AudioIO struct {
 	energyFloor       float64
 	warmupDone        atomic.Bool
 	warmupEnergy      []float64
-	playRmsEma        float64
+	playRmsEmaBits        atomic.Uint64
 	bargeHoldMs       float64
 	anySpeechMs       float64
 	silenceStart      *time.Time
@@ -62,6 +62,7 @@ type AudioIO struct {
 	playbackDevice    *malgo.Device
 	mutex             sync.Mutex
 	stopOnce		  sync.Once
+	loopDone          chan struct{}
 }
 
 var globalAudioIO *AudioIO
@@ -72,11 +73,22 @@ func NewAudioIO(ctrl *Realtime) *AudioIO {
 		playBuf:      make([]byte, 0),
 		micCh:        make(chan []byte, 10),
 		stopCh:       make(chan struct{}),
+		loopDone:     make(chan struct{}),
 		energyFloor:  EnergyThresh,
 		warmupEnergy: make([]float64, 0),
 	}
 	globalAudioIO = audioIO
 	return audioIO
+}
+
+func (a *AudioIO) getPlayRmsEma() float64 {
+    bits := a.playRmsEmaBits.Load()
+    return math.Float64frombits(bits)
+}
+
+func (a *AudioIO) setPlayRmsEma(val float64) {
+    bits := math.Float64bits(val)
+    a.playRmsEmaBits.Store(bits)
 }
 
 func bytesForMs(ms float64) int {
@@ -140,6 +152,7 @@ func (a *AudioIO) start() error {
 	}
 
 	log.Println("Audio devices started")
+
 	return nil
 }
 
@@ -188,7 +201,10 @@ func outputCallback(pOutput, pInput []byte, frameCount uint32) {
 			pOutput[i] = 0
 		}
 		globalAudioIO.playBuf = globalAudioIO.playBuf[:0]
-		globalAudioIO.playRmsEma *= 0.95
+		oldBits := globalAudioIO.playRmsEmaBits.Load()
+		oldEma := math.Float64frombits(oldBits)
+		newEma := oldEma * 0.95
+		globalAudioIO.playRmsEmaBits.Store(math.Float64bits(newEma))
 	}
 
 	if sampleCount > 0 {
@@ -199,11 +215,16 @@ func outputCallback(pOutput, pInput []byte, frameCount uint32) {
 			sum += sampleFloat * sampleFloat
 		}
 		rms := math.Sqrt(sum / float64(sampleCount))
-		globalAudioIO.playRmsEma = globalAudioIO.playRmsEma*0.80 + rms*0.20
+		oldBits := globalAudioIO.playRmsEmaBits.Load()
+		oldEma := math.Float64frombits(oldBits)
+		newEma := oldEma*0.80 + rms*0.20
+		globalAudioIO.playRmsEmaBits.Store(math.Float64bits(newEma))
 	}
 }
 
 func (a *AudioIO) loop() {
+	defer close(a.loopDone)
+
 	chunkMs := (float64(ChunkSize) / Rate) * 1000.0
 
 	ticker := time.NewTicker(100*time.Millisecond)
@@ -253,19 +274,22 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 
 	voiced := energy >= a.energyFloor
 
-	if a.ctrl.hold {
+	if a.ctrl.hold.Load() {
 		a.resetRecording()
 		return
 	}
 
-	if a.ctrl.responding || len(a.playBuf) > 0 {
+	if a.ctrl.responding.Load() || len(a.playBuf) > 0 {
 		if AnySpeechBarge && voiced && (energy >= a.energyFloor*AnySpeechGain) {
 			a.anySpeechMs += chunkMs
 		} else {
 			a.anySpeechMs = 0.0
 		}
 
-		cmpTrigger := (a.playRmsEma >= BargePlayRmsMin) && (energy >= (a.playRmsEma*BargeAlpha + BargeBeta))
+		playRmsBits := a.playRmsEmaBits.Load()
+	    playRms := math.Float64frombits(playRmsBits)
+
+		cmpTrigger := (playRms >= BargePlayRmsMin) && (energy >= (playRms*BargeAlpha + BargeBeta))
 		floorTrigger := energy >= (a.energyFloor * BargeFloorGain)
 
 		if (a.anySpeechMs >= AnySpeechMinMs) || cmpTrigger || floorTrigger {
@@ -329,31 +353,33 @@ func (a *AudioIO) checkEOU() {
 }
 
 func (a *AudioIO) checkSilence() {
-	if !a.ctrl.responding && !a.responseEnded.Load() {
+	if !a.ctrl.responding.Load() && !a.responseEnded.Load() {
 		return
 	}
 
 	now := time.Now()
-	if a.playRmsEma < RmsThresh {
+	playRmsBits := a.playRmsEmaBits.Load()
+	playRms := math.Float64frombits(playRmsBits)
+	if playRms < RmsThresh {
 		if a.silenceStart == nil {
 			ts := now
 			a.silenceStart = &ts
 		} else if now.Sub(*a.silenceStart).Milliseconds() >= int64(SilenceDurMs) {
-			if a.responseEnded.Load() && !a.ctrl.responding {
+			if a.responseEnded.Load() && !a.ctrl.responding.Load() {
 				a.ctrl.writeState(false)
 				a.silenceStart = nil
 			}
 		}
 	} else {
 		a.silenceStart = nil
-		if a.ctrl.responding || len(a.playBuf) > 0 {
+		if a.ctrl.responding.Load() || len(a.playBuf) > 0 {
 			a.ctrl.writeState(true)
 		}
 	}
 }
 
 func (a *AudioIO) commitAtomic() {
-	if a.ctrl.hold {
+	if a.ctrl.hold.Load() {
 		a.resetRecording()
 		return
 	}
@@ -420,7 +446,10 @@ func (a *AudioIO) cutOutput() {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 	a.playBuf = a.playBuf[:0]
-	a.playRmsEma *= 0.2
+	
+	oldBits := a.playRmsEmaBits.Load()
+    oldEma := math.Float64frombits(oldBits)
+    a.playRmsEmaBits.Store(math.Float64bits(oldEma * 0.2))
 }
 
 func (a *AudioIO) median(values []float64) float64 {
@@ -450,6 +479,7 @@ func (a *AudioIO) median(values []float64) float64 {
 func (a *AudioIO) stop() {
 	a.stopOnce.Do(func() {
 		close(a.stopCh)
+		<-a.loopDone
 
 		if a.captureDevice != nil {
 			a.captureDevice.Stop()
