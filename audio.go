@@ -63,6 +63,8 @@ type AudioIO struct {
 	mutex             sync.Mutex
 	stopOnce		  sync.Once
 	loopDone          chan struct{}
+	bufferPool		  sync.Pool
+	samplesPool       sync.Pool
 }
 
 var globalAudioIO *AudioIO
@@ -76,19 +78,19 @@ func NewAudioIO(ctrl *Realtime) *AudioIO {
 		loopDone:     make(chan struct{}),
 		energyFloor:  EnergyThresh,
 		warmupEnergy: make([]float64, 0),
+		bufferPool: sync.Pool{
+			New: func() interface{} {
+				return make([]byte, ChunkSize*SampleBytes*Channels)
+			},
+		},
+		samplesPool: sync.Pool{
+			New: func() interface{} {
+				return make([]int16, ChunkSize)
+			},
+		},
 	}
 	globalAudioIO = audioIO
 	return audioIO
-}
-
-func (a *AudioIO) getPlayRmsEma() float64 {
-    bits := a.playRmsEmaBits.Load()
-    return math.Float64frombits(bits)
-}
-
-func (a *AudioIO) setPlayRmsEma(val float64) {
-    bits := math.Float64bits(val)
-    a.playRmsEmaBits.Store(bits)
 }
 
 func bytesForMs(ms float64) int {
@@ -162,9 +164,20 @@ func inputCallback(pOutput, pInput []byte, frameCount uint32) {
 	}
 
 	sampleCount := int(frameCount)
-	data := make([]byte, sampleCount*2)
+	data := globalAudioIO.bufferPool.Get().([]byte)
+    if cap(data) < sampleCount*2 {
+        data = make([]byte, sampleCount*2)
+    } else {
+        data = data[:sampleCount*2]
+    }
 
 	inputSamples := make([]int16, sampleCount)
+	if cap(inputSamples) < sampleCount {
+        inputSamples = make([]int16, sampleCount)
+    } else {
+        inputSamples = inputSamples[:sampleCount]
+    }
+
 	for i := 0; i < sampleCount; i++ {
 		inputSamples[i] = int16(binary.LittleEndian.Uint16(pInput[i*2:]))
 	}
@@ -176,6 +189,8 @@ func inputCallback(pOutput, pInput []byte, frameCount uint32) {
 	select {
 	case globalAudioIO.micCh <- data:
 	default:
+		globalAudioIO.bufferPool.Put(data[:cap(data)])
+        globalAudioIO.samplesPool.Put(inputSamples[:cap(inputSamples)])
 	}
 }
 
@@ -323,6 +338,8 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 
 	a.checkEOU()
 	a.checkSilence()
+
+	a.bufferPool.Put(data[:cap(data)])
 }
 
 func (a *AudioIO) checkEOU() {
