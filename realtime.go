@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
+	"math"
 )
 
 const StateFile = "state.json"
@@ -14,10 +16,10 @@ const StateFile = "state.json"
 type Realtime struct {
 	sock             	*Socket
 	sentUpdate       	bool
-	responding       	bool
+	responding       	atomic.Bool
 	activeResponseID 	*string
 	ignoreIDs        	map[string]bool
-	hold             	bool
+	hold             	atomic.Bool
 	holdTimer        	*time.Timer
 	inputCleared     	bool
 	lastCommitLen    	int
@@ -47,7 +49,9 @@ func (rt *Realtime) writeState(isTalking bool) {
 	maxRMS := 0.01
 	intensity := 0.0
 	if isTalking {
-		intensity = min(1.0, max(0.0, rt.audio.playRmsEma/maxRMS))
+		playRmsBits := rt.audio.playRmsEmaBits.Load()
+		playRms := math.Float64frombits(playRmsBits)
+		intensity = min(1.0, max(0.0, playRms/maxRMS))
 	}
 
 	state := map[string]interface{}{
@@ -98,7 +102,7 @@ func (rt *Realtime) onBargeIn() {
 		rt.ignoreIDs[*rid] = true
 	}
 
-	rt.responding = false
+	rt.responding.Store(false)
 	rt.activeResponseID = nil
 	rt.audio.responseEnded.Store(false)
 	rt.writeState(false)
@@ -121,14 +125,14 @@ func (rt *Realtime) onBargeIn() {
 }
 
 func (rt *Realtime) setHold(val bool) {
-	rt.hold = val
+	rt.hold.Store(val)
 }
 
 func (rt *Realtime) releaseHold() {
 	rt.txnLock.Lock()
 	defer rt.txnLock.Unlock()
 
-	if !rt.hold {
+	if !rt.hold.Load() {
 		return
 	}
 	rt.setHold(false)
@@ -198,15 +202,15 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 		if !rt.ignoreIDs[rid] {
 			if rt.activeResponseID == nil {
 				rt.activeResponseID = &rid
-				rt.responding = true
+				rt.responding.Store(true)
 				rt.audio.responseEnded.Store(false)
 				rt.writeState(true)
 				log.Printf("[RESP] created id=%s", rid)
-			}
+			}	
 		}
 
 	case "response.output_audio.delta", "response.audio.delta":
-		if rt.hold {
+		if rt.hold.Load() {
 			return
 		}
 		rid := getResponseID(msg)
@@ -246,7 +250,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta",
 		"response.text.delta", "response.output_text.delta":
-		if rt.hold {
+		if rt.hold.Load() {
 			return
 		}
 		rid := getResponseID(msg)
@@ -260,7 +264,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 
 	case "response.output_audio_transcript.done", "response.audio_transcript.done",
 		"response.output_text.done", "response.text.done":
-		if !rt.hold {
+		if !rt.hold.Load() {
 			println()
 		}
 
@@ -285,7 +289,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			log.Printf("[PIPE] committed ack txn=%d", *rt.latestCommittedTxn)
 		}
 
-		if rt.responding || rt.hold || rt.inputCleared {
+		if rt.responding.Load() || rt.hold.Load() || rt.inputCleared {
 			rt.pendingCreate = true
 			log.Println("[PIPE] responding/HOLD/cleared → pending_create=True")
 			rt.txnLock.Unlock()
@@ -311,7 +315,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			delete(rt.ignoreIDs, rid)
 		}
 		if rt.activeResponseID != nil && rid == *rt.activeResponseID {
-			rt.responding = false
+			rt.responding.Store(false)
 			rt.activeResponseID = nil
 			rt.audio.responseEnded.Store(true)
 		}
@@ -323,7 +327,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			})
 		}
 
-		if rt.pendingCreate && !rt.hold && !rt.inputCleared {
+		if rt.pendingCreate && !rt.hold.Load() && !rt.inputCleared {
 			rt.pendingCreate = false
 			if rt.latestCommittedTxn != nil &&
 				rt.lastCreatedForTxn != rt.latestCommittedTxn &&
@@ -353,7 +357,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 }
 
 func (rt *Realtime) createResponseLocked() {
-	if rt.hold || rt.responding || rt.inputCleared {
+	if rt.hold.Load() || rt.responding.Load() || rt.inputCleared {
 		return
 	}
 	if rt.latestCommittedTxn == nil {
