@@ -62,6 +62,7 @@ type AudioIO struct {
 	playbackDevice    *malgo.Device
 	mutex             sync.Mutex
 	stopOnce		  sync.Once
+	loopDone          chan struct{}
 }
 
 var globalAudioIO *AudioIO
@@ -72,6 +73,7 @@ func NewAudioIO(ctrl *Realtime) *AudioIO {
 		playBuf:      make([]byte, 0),
 		micCh:        make(chan []byte, 10),
 		stopCh:       make(chan struct{}),
+		loopDone:     make(chan struct{}),
 		energyFloor:  EnergyThresh,
 		warmupEnergy: make([]float64, 0),
 	}
@@ -140,6 +142,7 @@ func (a *AudioIO) start() error {
 	}
 
 	log.Println("Audio devices started")
+
 	return nil
 }
 
@@ -204,6 +207,8 @@ func outputCallback(pOutput, pInput []byte, frameCount uint32) {
 }
 
 func (a *AudioIO) loop() {
+	defer close(a.loopDone)
+
 	chunkMs := (float64(ChunkSize) / Rate) * 1000.0
 
 	ticker := time.NewTicker(100*time.Millisecond)
@@ -450,6 +455,7 @@ func (a *AudioIO) median(values []float64) float64 {
 func (a *AudioIO) stop() {
 	a.stopOnce.Do(func() {
 		close(a.stopCh)
+		<-a.loopDone
 
 		if a.captureDevice != nil {
 			a.captureDevice.Stop()

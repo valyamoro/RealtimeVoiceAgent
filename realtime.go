@@ -12,24 +12,24 @@ import (
 const StateFile = "state.json"
 
 type Realtime struct {
-	sock             *Socket
-	sentUpdate       bool
-	responding       bool
-	activeResponseID *string
-	ignoreIDs        map[string]bool
-	hold             bool
-	holdTimer        *time.Timer
-	inputCleared     bool
-	lastCommitLen    int
-	txnLock          sync.Mutex
-	txnGen           int
-	inflightCommit   bool
-	inflightCreate   bool
-	activeTxnID      *int
-	latestCommittedTxn *int
-	lastCreatedForTxn *int
-	pendingCreate    bool
-	audio            *AudioIO
+	sock             	*Socket
+	sentUpdate       	bool
+	responding       	bool
+	activeResponseID 	*string
+	ignoreIDs        	map[string]bool
+	hold             	bool
+	holdTimer        	*time.Timer
+	inputCleared     	bool
+	lastCommitLen    	int
+	txnLock          	sync.Mutex
+	txnGen           	int
+	inflightCommit   	bool
+	inflightCreate   	bool
+	activeTxnID      	*int
+	latestCommittedTxn  *int
+	lastCreatedForTxn 	*int
+	pendingCreate    	bool
+	audio            	*AudioIO
 }
 
 func NewRealtime(apiKey, wsURL string) *Realtime {
