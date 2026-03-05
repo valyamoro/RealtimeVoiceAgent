@@ -305,7 +305,7 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 	    playRms := math.Float64frombits(playRmsBits)
 
 		cmpTrigger := (playRms >= BargePlayRmsMin) && (energy >= (playRms*BargeAlpha + BargeBeta))
-		floorTrigger := energy >= (a.energyFloor * BargeFloorGain)
+		floorTrigger := (playRms >= BargePlayRmsMin) && energy >= (a.energyFloor * BargeFloorGain)
 
 		if (a.anySpeechMs >= AnySpeechMinMs) || cmpTrigger || floorTrigger {
 			a.bargeHoldMs += chunkMs
