@@ -440,9 +440,9 @@ func (a *AudioIO) commitAtomic() {
 
 		ms := (float64(bufLen) / (Rate * SampleBytes * Channels)) * 1000.0
 		log.Printf("Commit[txn=%d]: %d bytes (~%.0f ms)", txn, bufLen, ms)
-	}
 
-	a.lastCommitTs = time.Now()
+		a.ctrl.lastCommitLen = bufLen
+	}
 }
 
 func (a *AudioIO) resetRecording() {
