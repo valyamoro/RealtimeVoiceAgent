@@ -115,6 +115,8 @@ func (rt *Realtime) onBargeIn() {
 	rt.activeTxnID = nil
 	rt.pendingCreate = false
 	rt.lastCommitLen = 0
+	rt.lastCreatedForTxn = nil
+	rt.latestCommittedTxn = nil
 	rt.setHold(true)
 	log.Println("[HOLD ON] (0.5s)")
 
