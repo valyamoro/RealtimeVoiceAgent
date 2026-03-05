@@ -199,6 +199,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			return
 		}
 
+		rt.txnLock.Lock()
 		if !rt.ignoreIDs[rid] {
 			if rt.activeResponseID == nil {
 				rt.activeResponseID = &rid
@@ -208,6 +209,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 				log.Printf("[RESP] created id=%s", rid)
 			}	
 		}
+		rt.txnLock.Unlock()
 
 	case "response.output_audio.delta", "response.audio.delta":
 		if rt.hold.Load() {
@@ -311,6 +313,7 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			return
 		}
 
+		rt.txnLock.Lock()
 		if rt.ignoreIDs[rid] {
 			delete(rt.ignoreIDs, rid)
 		}
@@ -320,7 +323,6 @@ func (rt *Realtime) onMessage(msg map[string]interface{}) {
 			rt.audio.responseEnded.Store(true)
 		}
 
-		rt.txnLock.Lock()
 		if !rt.inputCleared {
 			rt.sock.Send(map[string]interface{}{
 				"type": "input_audio_buffer.clear",
