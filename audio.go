@@ -26,12 +26,12 @@ const (
 	RmsThresh     = 0.0008
 	SilenceDurMs  = 500.0
 	AnySpeechBarge = true
-	AnySpeechGain  = 1.5
+	AnySpeechGain  = 2.3
 	AnySpeechMinMs = 250.0
 	BargeAlpha     = 1.1
 	BargeBeta      = 0.005
-	BargeFloorGain = 1.5
-	BargeMinHoldMs = 200.0
+	BargeFloorGain = 2.0
+	BargeMinHoldMs = 350.0
 	BargePlayRmsMin = 0.0008
 	HoldDurationMs  = 500.0
 )
@@ -277,8 +277,7 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 		}
 	}
 
-	if !a.recording && voiced {
-		a.recording = true
+	if !a.recording && voiced && energy >= a.energyFloor*1.3 {		a.recording = true
 		a.utterBuf = make([]byte, 0)
 		a.utterVoiceMs = 0.0
 		a.utterStart = now
@@ -366,6 +365,8 @@ func (a *AudioIO) commitAtomic() {
 	copy(audioCopy, a.utterBuf)
 
 	bufLen := len(audioCopy)
+
+	a.ctrl.lastCommitLen = bufLen
 
 	a.ctrl.txnLock.Lock()
 	if a.ctrl.inflightCommit || a.ctrl.inputCleared {
