@@ -12,19 +12,19 @@ import (
 )
 
 const (
-	Rate          = 24000
-	SampleBytes   = 2
-	Channels      = 1
-	ChunkSize     = 720
-	SilenceTail   = 0.40
-	GraceSilence  = 450.0
-	MinVoiceSec   = 0.40
-	AntibounceMs  = 180.0
-	MinBufferMs   = 200.0
-	EnergyThresh  = 0.012
-	VadWarmupSec  = 0.6
-	RmsThresh     = 0.0008
-	SilenceDurMs  = 500.0
+	Rate           = 24000
+	SampleBytes    = 2
+	Channels       = 1
+	ChunkSize      = 720
+	SilenceTail    = 0.25   // раньше 0.40
+	GraceSilence   = 300.0  // раньше 450.0
+	MinVoiceSec    = 0.25   // раньше 0.40
+	AntibounceMs   = 120.0  // раньше 180.0
+	MinBufferMs    = 120.0  // раньше 200.0
+	EnergyThresh   = 0.012
+	VadWarmupSec   = 0.6
+	RmsThresh      = 0.0008
+	SilenceDurMs   = 500.0
 	AnySpeechBarge = true
 	AnySpeechGain  = 2.3
 	AnySpeechMinMs = 250.0
@@ -34,6 +34,7 @@ const (
 	BargeMinHoldMs = 350.0
 	BargePlayRmsMin = 0.0008
 	HoldDurationMs  = 500.0
+	MaxUtterMs      = 2500.0 // жёсткий максимум длины utterance, чтобы не копить по 10–20 секунд
 )
 
 type AudioIO struct {
@@ -288,6 +289,15 @@ func (a *AudioIO) processAudioChunk(data []byte, chunkMs float64) {
 		a.utterBuf = append(a.utterBuf, data...)
 		if voiced {
 			a.utterVoiceMs += chunkMs
+		}
+
+		// Форс-EOU: если высказывание стало слишком длинным, коммитим принудительно,
+		// чтобы на шумной/медленной машине (например, Raspberry Pi) не копить десятки секунд.
+		totalMs := (float64(len(a.utterBuf)) / (Rate * SampleBytes * Channels)) * 1000.0
+		if totalMs >= MaxUtterMs {
+			a.commitAtomic()
+			a.resetRecording()
+			return
 		}
 	}
 
